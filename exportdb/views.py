@@ -21,6 +21,7 @@ from .tasks import export
 
 
 EXPORTDB_EXPORT_KEY = 'exportdb_export'
+EXPORTDB_EXPORT_FILE = 'exportdb_export_file'
 
 
 class ExportPermissionMixin(object):
@@ -76,11 +77,14 @@ class ExportView(ExportPermissionMixin, FormView):
         return context
 
     def form_valid(self, form):
+        self.request.session[EXPORTDB_EXPORT_FILE] = None
         # multi-tenant support
         tenant = getattr(connection, 'tenant', None)
         # start actual export and render the template
         async_result = export.delay(self.get_exporter_class(), tenant=tenant, **form.cleaned_data)
         self.request.session[EXPORTDB_EXPORT_KEY] = async_result.id
+        if async_result.ready():
+            self.request.session[EXPORTDB_EXPORT_FILE] = async_result.result
         context = self.get_context_data(export_running=True)
         self.template_name = 'exportdb/in_progress.html'
         return self.render_to_response(context)
@@ -92,6 +96,14 @@ class ExportPendingView(ExportPermissionMixin, View):
         return HttpResponse(json.dumps(data), content_type='application/json')
 
     def get(self, request, *args, **kwargs):
+        file_name = request.session.get(EXPORTDB_EXPORT_FILE, None)
+        if file_name:
+            content = {
+                'status': 'SUCCESS',
+                'progress': 1,
+                'file': file_name
+            }
+            return self.json_response(content)
         async_result = AsyncResult(request.session.get(EXPORTDB_EXPORT_KEY))
         if not async_result:
             return self.json_response({'status': 'FAILURE', 'progress': 0})
